@@ -20,6 +20,16 @@ Parameters:
   DbPort:
     Type: Number
     Default: 5432
+  NoncurrentVersionDays:
+    Type: Number
+    Default: 90
+  ReplicaRegion:
+    Type: String
+    Default: eu-central-1
+  ReplicaStorageClass:
+    Type: String
+    Default: GLACIER_IR
+    AllowedValues: [STANDARD, STANDARD_IA, GLACIER_IR]
 
 Resources:
 
@@ -33,6 +43,16 @@ Resources:
         AppPort: !Ref AppPort
         DbPort: !Ref DbPort
 
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://onward-${Environment}-cfn-templates-${AWS::AccountId}.s3.${AWS::Region}.amazonaws.com/children/storage.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        NoncurrentVersionDays: !Ref NoncurrentVersionDays
+        ReplicaRegion: !Ref ReplicaRegion
+        ReplicaStorageClass: !Ref ReplicaStorageClass
+
 Outputs:
   TemplatesRevision:
     Description: Which commit's child templates are deployed.
@@ -41,3 +61,5 @@ Outputs:
     Value: !GetAtt NetworkStack.Outputs.VpcId
   AppSubnetIds:
     Value: !GetAtt NetworkStack.Outputs.AppSubnetIds
+  PhotoBucketName:
+    Value: !GetAtt StorageStack.Outputs.PhotoBucketName

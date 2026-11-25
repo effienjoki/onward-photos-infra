@@ -5,6 +5,9 @@ parameters:
   VpcCidr: 10.0.0.0/16
   AppPort: 8080
   DbPort: 5432
+  NoncurrentVersionDays: 90
+  ReplicaRegion: eu-central-1
+  ReplicaStorageClass: GLACIER_IR
 tags:
   Project: onward
   Owner: Effie Njoki
