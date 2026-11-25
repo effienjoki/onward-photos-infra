@@ -1,0 +1,52 @@
+name: Upload child templates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'templates/children/**'
+  workflow_dispatch:
+
+permissions:
+  id-token: write    # lets the workflow ask GitHub for an OIDC token
+  contents: write    # lets the workflow commit the new revision
+
+concurrency:
+  group: upload-child-templates
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Check templates for errors
+        run: cfn-lint --non-zero-exit-code error templates/**/*.yaml
+
+      - name: Sign in to AWS with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Upload child templates to S3
+        run: aws s3 cp templates/children/ "s3://${{ vars.TEMPLATES_BUCKET }}/children/" --recursive
+
+      - name: Record the new revision in the root deployment file
+        run: |
+          FILE=deployments/dev/root.yaml
+          if [ ! -f "$FILE" ]; then
+            echo "No root deployment file yet. Upload done, nothing to trigger."
+            exit 0
+          fi
+          sed -i "s/^  TemplatesRevision: .*/  TemplatesRevision: '${GITHUB_SHA}'/" "$FILE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FILE"
+          git commit -m "Deploy child templates from ${GITHUB_SHA::7}"
+          git push
