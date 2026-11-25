@@ -1,3 +1,4 @@
+# Bootstrap stack: templates bucket and GitHub Actions OIDC role.
 template-file-path: templates/bootstrap.yaml
 parameters:
   Environment: dev
