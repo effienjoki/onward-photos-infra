@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics delivery photos. Database: RDS for PostgreSQL, Multi-AZ,
+  in the private data subnets, password managed by RDS in Secrets Manager.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  DataSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: The two private data subnets, from the network child.
+  DbSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Database security group, from the network child.
+  DbPort:
+    Type: Number
+    Default: 5432
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+  DbMaxAllocatedStorage:
+    Type: Number
+    Default: 100
+  MultiAz:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  BackupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 35
+  DeletionProtection:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  DbName:
+    Type: String
+    Default: photos
+  DbMasterUsername:
+    Type: String
+    Default: onwardadmin
+
+Resources:
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub 'onward-${Environment}-db-subnets'
+      DBSubnetGroupDescription: Private data subnets for the photos database, one per Availability Zone.
+      SubnetIds: !Ref DataSubnetIds
+
+  DbParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      DBParameterGroupName: !Sub 'onward-${Environment}-postgres16'
+      Description: PostgreSQL 16 settings for the photos database. Encrypted connections only.
+      Family: postgres16
+      Parameters:
+        rds.force_ssl: '1'
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub 'onward-${Environment}-photos-db'
+      Engine: postgres
+      EngineVersion: '16'
+      AutoMinorVersionUpgrade: true
+      DBInstanceClass: !Ref DbInstanceClass
+      DBName: !Ref DbName
+      Port: !Ref DbPort
+      MasterUsername: !Ref DbMasterUsername
+      ManageMasterUserPassword: true
+      MultiAZ: !Ref MultiAz
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroupId
+      PubliclyAccessible: false
+      DBParameterGroupName: !Ref DbParameterGroup
+      StorageType: gp3
+      AllocatedStorage: !Ref DbAllocatedStorage
+      MaxAllocatedStorage: !Ref DbMaxAllocatedStorage
+      StorageEncrypted: true
+      BackupRetentionPeriod: !Ref BackupRetentionDays
+      PreferredBackupWindow: '01:00-02:00'
+      PreferredMaintenanceWindow: 'sun:02:30-sun:03:30'
+      CopyTagsToSnapshot: true
+      DeletionProtection: !Ref DeletionProtection
+      EnableCloudwatchLogsExports:
+        - postgresql
+
+  # ---------- Publish for the app ----------
+
+  DbEndpointParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/database/endpoint'
+      Type: String
+      Value: !GetAtt Database.Endpoint.Address
+      Description: Address of the photos database.
+
+  DbPortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/database/port'
+      Type: String
+      Value: !GetAtt Database.Endpoint.Port
+      Description: Port of the photos database.
+
+  DbNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/database/name'
+      Type: String
+      Value: !Ref DbName
+      Description: Name of the photos database.
+
+  DbSecretArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/database/secret-arn'
+      Type: String
+      Value: !GetAtt Database.MasterUserSecret.SecretArn
+      Description: ARN of the RDS-managed secret holding the database username and password.
+
+Outputs:
+  DbEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  DbSecretArn:
+    Value: !GetAtt Database.MasterUserSecret.SecretArn
