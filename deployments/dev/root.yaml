@@ -8,6 +8,20 @@ parameters:
   NoncurrentVersionDays: 90
   ReplicaRegion: eu-central-1
   ReplicaStorageClass: GLACIER_IR
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  MultiAz:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  BackupRetentionDays:
+    Type: Number
+    Default: 7
+  DeletionProtection:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
 tags:
   Project: onward
   Owner: Effie Njoki

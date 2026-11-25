@@ -11,6 +11,10 @@ Parameters:
     Type: String
     Default: initial
     Description: Commit ID of the child templates in S3. Updated by GitHub Actions; changing it triggers Git sync.
+  DbInstanceClass: db.t4g.micro
+  MultiAz: 'true'
+  BackupRetentionDays: 7
+  DeletionProtection: 'true'
   VpcCidr:
     Type: String
     Default: 10.0.0.0/16
@@ -53,6 +57,20 @@ Resources:
         ReplicaRegion: !Ref ReplicaRegion
         ReplicaStorageClass: !Ref ReplicaStorageClass
 
+  DatabaseStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://onward-${Environment}-cfn-templates-${AWS::AccountId}.s3.${AWS::Region}.amazonaws.com/children/database.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        DataSubnetIds: !GetAtt NetworkStack.Outputs.DataSubnetIds
+        DbSecurityGroupId: !GetAtt NetworkStack.Outputs.DbSecurityGroupId
+        DbPort: !Ref DbPort
+        DbInstanceClass: !Ref DbInstanceClass
+        MultiAz: !Ref MultiAz
+        BackupRetentionDays: !Ref BackupRetentionDays
+        DeletionProtection: !Ref DeletionProtection
+
 Outputs:
   TemplatesRevision:
     Description: Which commit's child templates are deployed.
@@ -63,3 +81,5 @@ Outputs:
     Value: !GetAtt NetworkStack.Outputs.AppSubnetIds
   PhotoBucketName:
     Value: !GetAtt StorageStack.Outputs.PhotoBucketName
+  DbEndpoint:
+    Value: !GetAtt DatabaseStack.Outputs.DbEndpoint
