@@ -2,7 +2,7 @@
 template-file-path: templates/bootstrap.yaml
 parameters:
   Environment: dev
-  GitHubRepository: effienjoki/onward-photos-infra
+  GitHubRepository: effienjoki@330395797/onward-photos-infra@1471571406
   GitHubBranch: main
   CreateGitHubOidcProvider: 'true'
 tags:
