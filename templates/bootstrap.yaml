@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics delivery photos. Bootstrap: bucket for nested child templates,
+  and a GitHub Actions role (OIDC, no stored keys) that uploads them.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  GitHubRepository:
+    Type: String
+    Default: effienjoki/onward-photos-infra
+    Description: Owner/name of the infrastructure repository allowed to upload templates.
+  GitHubBranch:
+    Type: String
+    Default: main
+  CreateGitHubOidcProvider:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Description: 'false if this account already has the GitHub OIDC provider.'
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateGitHubOidcProvider, 'true']
+
+Resources:
+
+  # ---------- Bucket for child templates ----------
+
+  TemplatesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'onward-${Environment}-cfn-templates-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-template-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+
+  TemplatesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TemplatesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt TemplatesBucket.Arn
+              - !Sub '${TemplatesBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # ---------- GitHub OIDC trust ----------
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  # ---------- Role for the GitHub Actions workflow ----------
+
+  TemplateUploadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'onward-${Environment}-github-template-upload'
+      Description: Lets the infrastructure repo's workflow upload child templates only.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ListTemplatesBucket
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !GetAtt TemplatesBucket.Arn
+          - Sid: UploadChildTemplates
+            Effect: Allow
+            Action: s3:PutObject
+            Resource: !Sub '${TemplatesBucket.Arn}/children/*'
+
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-github-template-upload'
+      Description: Assumed by GitHub Actions through OIDC to upload child templates.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}'
+      ManagedPolicyArns:
+        - !Ref TemplateUploadPolicy
+
+Outputs:
+  TemplatesBucketName:
+    Value: !Ref TemplatesBucket
+  GitHubActionsRoleArn:
+    Value: !GetAtt GitHubActionsRole.Arn

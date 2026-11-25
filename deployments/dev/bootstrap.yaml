@@ -1,0 +1,10 @@
+template-file-path: templates/bootstrap.yaml
+parameters:
+  Environment: dev
+  GitHubRepository: effienjoki/onward-photos-infra
+  GitHubBranch: main
+  CreateGitHubOidcProvider: 'true'
+tags:
+  Project: onward
+  Owner: Effie Njoki
+  Environment: dev
