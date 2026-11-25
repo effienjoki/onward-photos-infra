@@ -1,0 +1,13 @@
+# IntelliJ settings (personal, not part of the project)
+.idea/
+*.iml
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Safety net: never commit keys or secrets
+*.pem
+*.key
+.env
+*.secret
