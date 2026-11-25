@@ -1,0 +1,8 @@
+template-file-path: templates/network.yaml
+parameters:
+  Environment: dev
+  VpcCidr: 10.0.0.0/16
+tags:
+  Project: onward
+  Owner: Effie Njoki
+  Environment: dev
