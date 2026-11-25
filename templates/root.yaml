@@ -1,0 +1,43 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics delivery photos. Root stack for the primary Region (Ireland).
+  Each layer is a child stack whose template is uploaded to S3 by GitHub Actions.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  TemplatesRevision:
+    Type: String
+    Default: initial
+    Description: Commit ID of the child templates in S3. Updated by GitHub Actions; changing it triggers Git sync.
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+  AppPort:
+    Type: Number
+    Default: 8080
+  DbPort:
+    Type: Number
+    Default: 5432
+
+Resources:
+
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://onward-${Environment}-cfn-templates-${AWS::AccountId}.s3.${AWS::Region}.amazonaws.com/children/network.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        VpcCidr: !Ref VpcCidr
+        AppPort: !Ref AppPort
+        DbPort: !Ref DbPort
+
+Outputs:
+  TemplatesRevision:
+    Description: Which commit's child templates are deployed.
+    Value: !Ref TemplatesRevision
+  VpcId:
+    Value: !GetAtt NetworkStack.Outputs.VpcId
+  AppSubnetIds:
+    Value: !GetAtt NetworkStack.Outputs.AppSubnetIds

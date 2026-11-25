@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics delivery photos. Primary photo bucket in Ireland with
+  versioning and Cross-Region Replication to the replica bucket in Frankfurt.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+    Description: Environment name, used in resource names.
+  NoncurrentVersionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: Days to keep old versions of a photo before they are permanently removed.
+  ReplicaRegion:
+    Type: String
+    Default: eu-central-1
+    Description: Region of the replica bucket (documentation only; S3 finds it by name).
+  ReplicaStorageClass:
+    Type: String
+    Default: GLACIER_IR
+    AllowedValues: [STANDARD, STANDARD_IA, GLACIER_IR]
+    Description: Storage class for the replica copies.
+
+Resources:
+
+  # ---------- Replication permissions (customer managed, no inline) ----------
+
+  ReplicationPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'onward-${Environment}-photos-replication'
+      Description: Lets S3 copy photos from the primary bucket to the replica bucket.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadReplicationConfig
+            Effect: Allow
+            Action:
+              - s3:GetReplicationConfiguration
+              - s3:ListBucket
+            Resource: !Sub 'arn:aws:s3:::onward-${Environment}-photos-${AWS::AccountId}'
+          - Sid: ReadSourceVersions
+            Effect: Allow
+            Action:
+              - s3:GetObjectVersionForReplication
+              - s3:GetObjectVersionAcl
+              - s3:GetObjectVersionTagging
+            Resource: !Sub 'arn:aws:s3:::onward-${Environment}-photos-${AWS::AccountId}/*'
+          - Sid: WriteReplicas
+            Effect: Allow
+            Action:
+              - s3:ReplicateObject
+              - s3:ReplicateTags
+            Resource: !Sub 'arn:aws:s3:::onward-${Environment}-photos-replica-${AWS::AccountId}/*'
+
+  ReplicationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-photos-replication'
+      Description: Used by S3 to replicate delivery photos to the replica Region.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Ref ReplicationPolicy
+
+  # ---------- Photo bucket ----------
+
+  PhotoBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'onward-${Environment}-photos-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref NoncurrentVersionDays
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      ReplicationConfiguration:
+        Role: !GetAtt ReplicationRole.Arn
+        Rules:
+          - Id: replicate-all-photos-to-replica-region
+            Status: Enabled
+            Priority: 1
+            Filter:
+              Prefix: ''
+            DeleteMarkerReplication:
+              Status: Disabled
+            Destination:
+              Bucket: !Sub 'arn:aws:s3:::onward-${Environment}-photos-replica-${AWS::AccountId}'
+              StorageClass: !Ref ReplicaStorageClass
+
+  PhotoBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PhotoBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt PhotoBucket.Arn
+              - !Sub '${PhotoBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # ---------- Publish for other stacks ----------
+
+  PhotoBucketNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/storage/photo-bucket-name'
+      Type: String
+      Value: !Ref PhotoBucket
+      Description: Name of the primary delivery photo bucket.
+
+  PhotoBucketArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/storage/photo-bucket-arn'
+      Type: String
+      Value: !GetAtt PhotoBucket.Arn
+      Description: ARN of the primary delivery photo bucket.
+
+Outputs:
+  PhotoBucketName:
+    Value: !Ref PhotoBucket
+  PhotoBucketArn:
+    Value: !GetAtt PhotoBucket.Arn
+  ReplicationRoleArn:
+    Value: !GetAtt ReplicationRole.Arn

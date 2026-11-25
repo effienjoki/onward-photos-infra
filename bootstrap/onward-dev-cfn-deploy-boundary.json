@@ -23,6 +23,7 @@
         "codebuild:*",
         "codedeploy:*",
         "codepipeline:*",
+        "cloudformation:*",
         "codeconnections:*",
         "codestar-connections:*",
         "budgets:*",
