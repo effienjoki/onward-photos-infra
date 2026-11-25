@@ -13,6 +13,14 @@ Parameters:
     Default: 10.0.0.0/16
     AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/16$'
     Description: Address range for the VPC. Must be a /16.
+  AppPort:
+    Type: Number
+    Default: 8080
+    Description: Port the application container listens on.
+  DbPort:
+    Type: Number
+    Default: 5432
+    Description: PostgreSQL port.
 
 Resources:
 
@@ -181,6 +189,105 @@ Resources:
       SubnetId: !Ref DataSubnetB
       RouteTableId: !Ref DataRouteTable
 
+  # ---------- Security groups: the chain ----------
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-alb-sg'
+      GroupDescription: Load balancer. Web traffic in from the internet, out to the app only.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: HTTP from the internet
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - Description: To the app containers only
+          IpProtocol: tcp
+          FromPort: !Ref AppPort
+          ToPort: !Ref AppPort
+          DestinationSecurityGroupId: !Ref AppSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-alb-sg'
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-app-sg'
+      GroupDescription: App containers. In from the load balancer only. Out to AWS services and the database.
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - Description: HTTPS to AWS services through VPC endpoints (no internet route exists)
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: PostgreSQL to the database only
+          IpProtocol: tcp
+          FromPort: !Ref DbPort
+          ToPort: !Ref DbPort
+          DestinationSecurityGroupId: !Ref DbSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-app-sg'
+
+  AppIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      Description: App port from the load balancer only
+      IpProtocol: tcp
+      FromPort: !Ref AppPort
+      ToPort: !Ref AppPort
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-db-sg'
+      GroupDescription: Database. In from the app only. No outbound connections.
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - Description: Removes the default allow-all outbound rule
+          IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-db-sg'
+
+  DbIngressFromApp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DbSecurityGroup
+      Description: PostgreSQL from the app only
+      IpProtocol: tcp
+      FromPort: !Ref DbPort
+      ToPort: !Ref DbPort
+      SourceSecurityGroupId: !Ref AppSecurityGroup
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-endpoint-sg'
+      GroupDescription: VPC interface endpoints. HTTPS in from the app only. No outbound connections.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: HTTPS from the app only
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+      SecurityGroupEgress:
+        - Description: Removes the default allow-all outbound rule
+          IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-endpoint-sg'
+
 Outputs:
   VpcId:
     Value: !Ref Vpc
@@ -190,3 +297,11 @@ Outputs:
     Value: !Join [',', [!Ref AppSubnetA, !Ref AppSubnetB]]
   DataSubnetIds:
     Value: !Join [',', [!Ref DataSubnetA, !Ref DataSubnetB]]
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+  AppSecurityGroupId:
+    Value: !Ref AppSecurityGroup
+  DbSecurityGroupId:
+    Value: !Ref DbSecurityGroup
+  EndpointSecurityGroupId:
+    Value: !Ref EndpointSecurityGroup
