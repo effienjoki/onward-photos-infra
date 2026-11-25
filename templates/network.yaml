@@ -288,6 +288,140 @@ Resources:
         - Key: Name
           Value: !Sub 'onward-${Environment}-endpoint-sg'
 
+  # ---------- VPC endpoints: private access to AWS services ----------
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref AppRouteTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: OnwardPhotoBucketOnly
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub 'arn:aws:s3:::onward-${Environment}-photos-${AWS::AccountId}/*'
+          - Sid: EcrImageLayers
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::prod-${AWS::Region}-starport-layer-bucket/*'
+
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.api'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  SsmEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssm'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  # ---------- Publish IDs for other stacks ----------
+
+  VpcIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/network/vpc-id'
+      Type: String
+      Value: !Ref Vpc
+      Description: VPC ID for the Onward delivery photos service.
+
+  PublicSubnetIdsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/network/public-subnet-ids'
+      Type: StringList
+      Value: !Join [',', [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+      Description: Public subnet IDs, one per Availability Zone.
+
+  AppSubnetIdsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/network/app-subnet-ids'
+      Type: StringList
+      Value: !Join [',', [!Ref AppSubnetA, !Ref AppSubnetB]]
+      Description: Private app subnet IDs, one per Availability Zone.
+
+  DataSubnetIdsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/network/data-subnet-ids'
+      Type: StringList
+      Value: !Join [',', [!Ref DataSubnetA, !Ref DataSubnetB]]
+      Description: Private data subnet IDs, one per Availability Zone.
+
+  AlbSecurityGroupIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/network/alb-sg-id'
+      Type: String
+      Value: !Ref AlbSecurityGroup
+      Description: Load balancer security group ID.
+
+  AppSecurityGroupIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/network/app-sg-id'
+      Type: String
+      Value: !Ref AppSecurityGroup
+      Description: App containers security group ID.
+
+  DbSecurityGroupIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/onward/${Environment}/network/db-sg-id'
+      Type: String
+      Value: !Ref DbSecurityGroup
+      Description: Database security group ID.
+
 Outputs:
   VpcId:
     Value: !Ref Vpc
