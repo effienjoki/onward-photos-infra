@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Onward Logistics delivery photos. Network: VPC with public, private app and
-  private data subnets in two Availability Zones. No NAT gateway.
+  private data subnets in two Availability Zones, VPC endpoints, no NAT gateway.
 
 Parameters:
   Environment:
