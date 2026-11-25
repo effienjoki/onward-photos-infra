@@ -1,7 +1,7 @@
 template-file-path: templates/root.yaml
 parameters:
   Environment: dev
-  TemplatesRevision: 'initial'
+  TemplatesRevision: '765debb9f5d27a4d8fa658f7575af0e51ff8e592'
   VpcCidr: 10.0.0.0/16
   AppPort: 8080
   DbPort: 5432
