@@ -1,0 +1,109 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowOnlyServicesThisWorkloadUses",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:*",
+        "ecs:*",
+        "ecr:*",
+        "s3:*",
+        "rds:*",
+        "iam:*",
+        "ssm:*",
+        "secretsmanager:*",
+        "elasticloadbalancing:*",
+        "application-autoscaling:*",
+        "cloudwatch:*",
+        "logs:*",
+        "events:*",
+        "cloudfront:*",
+        "lambda:*",
+        "codebuild:*",
+        "codedeploy:*",
+        "codepipeline:*",
+        "codeconnections:*",
+        "codestar-connections:*",
+        "budgets:*",
+        "kms:DescribeKey",
+        "kms:CreateGrant",
+        "kms:Decrypt",
+        "kms:GenerateDataKey*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyLongLivedCredentials",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateUser",
+        "iam:CreateAccessKey",
+        "iam:CreateLoginProfile",
+        "iam:UpdateLoginProfile",
+        "iam:AttachUserPolicy",
+        "iam:PutUserPolicy",
+        "iam:AddUserToGroup"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyInlinePolicies",
+      "Effect": "Deny",
+      "Action": [
+        "iam:PutRolePolicy",
+        "iam:PutUserPolicy",
+        "iam:PutGroupPolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyAttachingAdminPolicies",
+      "Effect": "Deny",
+      "Action": "iam:AttachRolePolicy",
+      "Resource": "*",
+      "Condition": {
+        "ArnEquals": {
+          "iam:PolicyARN": [
+            "arn:aws:iam::aws:policy/AdministratorAccess",
+            "arn:aws:iam::aws:policy/PowerUserAccess",
+            "arn:aws:iam::aws:policy/IAMFullAccess"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyRolesOutsideOnwardNaming",
+      "Effect": "Deny",
+      "Action": "iam:CreateRole",
+      "NotResource": "arn:aws:iam::438465164038:role/onward-*"
+    },
+    {
+      "Sid": "DenyChangingOwnRole",
+      "Effect": "Deny",
+      "Action": [
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:PutRolePermissionsBoundary",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:DeleteRole"
+      ],
+      "Resource": "arn:aws:iam::438465164038:role/onward-dev-cloudformation-deploy-role"
+    },
+    {
+      "Sid": "DenyChangingOwnPolicies",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicy",
+        "iam:DeletePolicyVersion",
+        "iam:SetDefaultPolicyVersion"
+      ],
+      "Resource": [
+        "arn:aws:iam::438465164038:policy/onward-dev-cfn-deploy-boundary",
+        "arn:aws:iam::438465164038:policy/onward-dev-cfn-deploy-photos"
+      ]
+    }
+  ]
+}
