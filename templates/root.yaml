@@ -53,6 +53,9 @@ Parameters:
   AppBranch:
     Type: String
     Default: main
+  InitialImageTag:
+    Type: String
+    Description: Image tag used only to create the ECS service.
 
 Resources:
 
@@ -113,6 +116,25 @@ Resources:
         AlbSecurityGroupId: !GetAtt NetworkStack.Outputs.AlbSecurityGroupId
         AppPort: !Ref AppPort
 
+  ServiceStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://onward-${Environment}-cfn-templates-${AWS::AccountId}.s3.${AWS::Region}.amazonaws.com/children/service.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        AppSubnetIds: !GetAtt NetworkStack.Outputs.AppSubnetIds
+        AppSecurityGroupId: !GetAtt NetworkStack.Outputs.AppSecurityGroupId
+        AppPort: !Ref AppPort
+        HttpListenerArn: !GetAtt LoadBalancerStack.Outputs.HttpListenerArn
+        BlueTargetGroupArn: !GetAtt LoadBalancerStack.Outputs.BlueTargetGroupArn
+        BlueTargetGroupName: !GetAtt LoadBalancerStack.Outputs.BlueTargetGroupName
+        GreenTargetGroupName: !GetAtt LoadBalancerStack.Outputs.GreenTargetGroupName
+        EcrRepositoryUri: !GetAtt AppStack.Outputs.EcrRepositoryUri
+        InitialImageTag: !Ref InitialImageTag
+        TaskRoleArn: !GetAtt AppStack.Outputs.TaskRoleArn
+        TaskExecutionRoleArn: !GetAtt AppStack.Outputs.TaskExecutionRoleArn
+        DbSecretArn: !GetAtt DatabaseStack.Outputs.DbSecretArn
+
 Outputs:
   TemplatesRevision:
     Description: Which commit's child templates are deployed.
@@ -132,3 +154,7 @@ Outputs:
   AppUrl:
     Description: Address of the photos app.
     Value: !Sub 'http://${LoadBalancerStack.Outputs.LoadBalancerDnsName}'
+  ClusterName:
+    Value: !GetAtt ServiceStack.Outputs.ClusterName
+  ServiceName:
+    Value: !GetAtt ServiceStack.Outputs.ServiceName

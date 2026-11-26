@@ -16,6 +16,7 @@ parameters:
   GitHubConnectionArn: arn:aws:codeconnections:eu-west-1:438465164038:connection/55a4ddba-c777-4bf2-9a2d-58692059e912
   AppRepository: effienjoki/onward-photos-app
   AppBranch: main
+  InitialImageTag: f3ce691
 tags:
   Project: onward
   Owner: Effie Njoki
