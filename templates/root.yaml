@@ -102,6 +102,17 @@ Resources:
         AppRepository: !Ref AppRepository
         AppBranch: !Ref AppBranch
 
+  LoadBalancerStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://onward-${Environment}-cfn-templates-${AWS::AccountId}.s3.${AWS::Region}.amazonaws.com/children/loadbalancer.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnetIds: !GetAtt NetworkStack.Outputs.PublicSubnetIds
+        AlbSecurityGroupId: !GetAtt NetworkStack.Outputs.AlbSecurityGroupId
+        AppPort: !Ref AppPort
+
 Outputs:
   TemplatesRevision:
     Description: Which commit's child templates are deployed.
@@ -118,3 +129,6 @@ Outputs:
     Value: !GetAtt AppStack.Outputs.EcrRepositoryUri
   PipelineName:
     Value: !GetAtt AppStack.Outputs.PipelineName
+  AppUrl:
+    Description: Address of the photos app.
+    Value: !Sub 'http://${LoadBalancerStack.Outputs.LoadBalancerDnsName}'
