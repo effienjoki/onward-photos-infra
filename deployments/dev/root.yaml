@@ -1,3 +1,4 @@
+# Dev environment values for the Ireland root stack.
 template-file-path: templates/root.yaml
 parameters:
   Environment: dev

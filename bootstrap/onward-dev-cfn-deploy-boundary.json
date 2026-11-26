@@ -30,7 +30,8 @@
         "kms:DescribeKey",
         "kms:CreateGrant",
         "kms:Decrypt",
-        "kms:GenerateDataKey*"
+        "kms:GenerateDataKey*",
+        "kms:ListAliases"
       ],
       "Resource": "*"
     },
