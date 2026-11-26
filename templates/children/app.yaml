@@ -1,0 +1,387 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics delivery photos. Application layer, part 1: container registry,
+  application roles and logs, and the pipeline that builds the container image.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  PhotoBucketArn:
+    Type: String
+    Description: ARN of the photo bucket, from the storage child.
+  DbSecretArn:
+    Type: String
+    Description: ARN of the RDS-managed database secret, from the database child.
+  GitHubConnectionArn:
+    Type: String
+    Description: CodeConnections connection used to read the app repository.
+  AppRepository:
+    Type: String
+    Description: Owner/name of the application repository.
+  AppBranch:
+    Type: String
+    Default: main
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+
+Resources:
+
+  # ---------- Container registry ----------
+
+  EcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'onward-${Environment}-photos-app'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the 20 most recent images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 20
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # ---------- Logs ----------
+
+  AppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/onward/${Environment}/photos-app'
+      RetentionInDays: !Ref LogRetentionDays
+
+  BuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/onward/${Environment}/photos-app-build'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------- Execution role: used by ECS to start the app ----------
+
+  ExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'onward-${Environment}-photos-app-execution'
+      Description: Lets ECS read the app's settings and database secret at start-up.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadOnwardSettings
+            Effect: Allow
+            Action: ssm:GetParameters
+            Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/onward/${Environment}/*'
+          - Sid: ReadDatabaseSecret
+            Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: !Ref DbSecretArn
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-photos-app-execution'
+      Description: Used by ECS to pull the image, write logs and read settings and secrets.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        - !Ref ExecutionPolicy
+
+  # ---------- Task role: used by the app's own code ----------
+
+  TaskPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'onward-${Environment}-photos-app-task'
+      Description: Lets the app upload and read photos in the photos folder of one bucket.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PhotosFolderOnly
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+            Resource: !Sub '${PhotoBucketArn}/photos/*'
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-photos-app-task'
+      Description: Used by the photos app's code to work with the photo bucket.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Ref TaskPolicy
+
+  # ---------- Pipeline artifact bucket ----------
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'onward-${Environment}-pipeline-artifacts-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-artifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub '${ArtifactBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # ---------- Build: CodeBuild ----------
+
+  BuildPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'onward-${Environment}-photos-app-build'
+      Description: Lets CodeBuild write its logs, use pipeline artifacts and push images to one repository.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: WriteBuildLogs
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !GetAtt BuildLogGroup.Arn
+          - Sid: UsePipelineArtifacts
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:PutObject
+            Resource: !Sub '${ArtifactBucket.Arn}/*'
+          - Sid: SignInToEcr
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: PushToAppRepository
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+            Resource: !GetAtt EcrRepository.Arn
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-photos-app-build'
+      Description: Used by CodeBuild to build and push the photos app image.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Ref BuildPolicy
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub 'onward-${Environment}-photos-app-build'
+      Description: Builds, tests and pushes the photos app image, and prepares the task definition.
+      ServiceRole: !GetAtt BuildRole.Arn
+      TimeoutInMinutes: 20
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+          - Name: REPOSITORY_URI
+            Value: !GetAtt EcrRepository.RepositoryUri
+          - Name: TASK_ROLE_ARN
+            Value: !GetAtt TaskRole.Arn
+          - Name: EXECUTION_ROLE_ARN
+            Value: !GetAtt TaskExecutionRole.Arn
+          - Name: DB_SECRET_ARN
+            Value: !Ref DbSecretArn
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref BuildLogGroup
+
+  # ---------- Pipeline: CodePipeline ----------
+
+  PipelinePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'onward-${Environment}-photos-app-pipeline'
+      Description: Lets the pipeline read the app repository, use its artifact bucket and run the build.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: UseArtifactObjects
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:PutObject
+            Resource: !Sub '${ArtifactBucket.Arn}/*'
+          - Sid: UseArtifactBucket
+            Effect: Allow
+            Action:
+              - s3:GetBucketVersioning
+              - s3:ListBucket
+            Resource: !GetAtt ArtifactBucket.Arn
+          - Sid: ReadAppRepository
+            Effect: Allow
+            Action:
+              - codeconnections:UseConnection
+              - codestar-connections:UseConnection
+            Resource: !Ref GitHubConnectionArn
+          - Sid: RunBuild
+            Effect: Allow
+            Action:
+              - codebuild:StartBuild
+              - codebuild:BatchGetBuilds
+            Resource: !GetAtt BuildProject.Arn
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-photos-app-pipeline'
+      Description: Used by CodePipeline to run the photos app pipeline.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Ref PipelinePolicy
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub 'onward-${Environment}-photos-app'
+      PipelineType: V2
+      ExecutionMode: QUEUED
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHub
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Ref AppRepository
+                BranchName: !Ref AppBranch
+                OutputArtifactFormat: CODE_ZIP
+                DetectChanges: true
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildImage
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref BuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+Outputs:
+  EcrRepositoryUri:
+    Value: !GetAtt EcrRepository.RepositoryUri
+  TaskRoleArn:
+    Value: !GetAtt TaskRole.Arn
+  TaskExecutionRoleArn:
+    Value: !GetAtt TaskExecutionRole.Arn
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket
+  PipelineName:
+    Value: !Ref Pipeline
+  BuildProjectName:
+    Value: !Ref BuildProject
