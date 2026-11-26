@@ -1,0 +1,229 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics delivery photos. ECS cluster and Fargate service for the photos app,
+  auto scaling, and CodeDeploy blue/green release settings.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  AppSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  AppPort:
+    Type: Number
+    Default: 8080
+  HttpListenerArn:
+    Type: String
+  BlueTargetGroupArn:
+    Type: String
+  BlueTargetGroupName:
+    Type: String
+  GreenTargetGroupName:
+    Type: String
+  EcrRepositoryUri:
+    Type: String
+  InitialImageTag:
+    Type: String
+    Description: Image tag used only to create the service. Later releases are done by CodeDeploy.
+  TaskRoleArn:
+    Type: String
+  TaskExecutionRoleArn:
+    Type: String
+  DbSecretArn:
+    Type: String
+  TaskCpu:
+    Type: String
+    Default: '512'
+  TaskMemory:
+    Type: String
+    Default: '1024'
+  DesiredCount:
+    Type: Number
+    Default: 2
+  MinTasks:
+    Type: Number
+    Default: 2
+  MaxTasks:
+    Type: Number
+    Default: 4
+  CpuTargetPercent:
+    Type: Number
+    Default: 60
+  DeploymentConfigName:
+    Type: String
+    Default: CodeDeployDefault.ECSAllAtOnce
+
+Resources:
+
+  # ---------- Cluster ----------
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub 'onward-${Environment}-cluster'
+
+  # ---------- Version 1 of the app (later versions come from CodeDeploy) ----------
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'onward-${Environment}-photos-app'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !Ref TaskExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: onward-photos-app
+          Image: !Sub '${EcrRepositoryUri}:${InitialImageTag}'
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref AppPort
+              Protocol: tcp
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+          Secrets:
+            - Name: PHOTO_BUCKET
+              ValueFrom: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/onward/${Environment}/storage/photo-bucket-name'
+            - Name: DB_HOST
+              ValueFrom: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/onward/${Environment}/database/endpoint'
+            - Name: DB_PORT
+              ValueFrom: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/onward/${Environment}/database/port'
+            - Name: DB_NAME
+              ValueFrom: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/onward/${Environment}/database/name'
+            - Name: DB_USERNAME
+              ValueFrom: !Sub '${DbSecretArn}:username::'
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub '${DbSecretArn}:password::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub '/onward/${Environment}/photos-app'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: app
+
+  # ---------- The service: 2 containers, one per AZ, behind the load balancer ----------
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub 'onward-${Environment}-photos-app'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      DesiredCount: !Ref DesiredCount
+      TaskDefinition: !Ref TaskDefinition
+      DeploymentController:
+        Type: CODE_DEPLOY
+      HealthCheckGracePeriodSeconds: 60
+      PropagateTags: SERVICE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref AppSubnetIds
+          SecurityGroups:
+            - !Ref AppSecurityGroupId
+      LoadBalancers:
+        - ContainerName: onward-photos-app
+          ContainerPort: !Ref AppPort
+          TargetGroupArn: !Ref BlueTargetGroupArn
+
+  # ---------- Auto scaling: 2 to 4 containers on CPU ----------
+
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub 'service/${Cluster}/${Service.Name}'
+      MinCapacity: !Ref MinTasks
+      MaxCapacity: !Ref MaxTasks
+
+  CpuScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub 'onward-${Environment}-photos-app-cpu'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: !Ref CpuTargetPercent
+        ScaleOutCooldown: 60
+        ScaleInCooldown: 120
+
+  # ---------- CodeDeploy: blue/green releases ----------
+
+  CodeDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-photos-app-codedeploy'
+      Description: Used by CodeDeploy to release new versions of the photos app to ECS.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS
+
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub 'onward-${Environment}-photos-app'
+      ComputePlatform: ECS
+
+  DeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: !Sub 'onward-${Environment}-photos-app-dg'
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      DeploymentConfigName: !Ref DeploymentConfigName
+      DeploymentStyle:
+        DeploymentType: BLUE_GREEN
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      BlueGreenDeploymentConfiguration:
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+          WaitTimeInMinutes: 0
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: 5
+      AutoRollbackConfiguration:
+        Enabled: true
+        Events:
+          - DEPLOYMENT_FAILURE
+      ECSServices:
+        - ClusterName: !Ref Cluster
+          ServiceName: !GetAtt Service.Name
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - TargetGroups:
+              - Name: !Ref BlueTargetGroupName
+              - Name: !Ref GreenTargetGroupName
+            ProdTrafficRoute:
+              ListenerArns:
+                - !Ref HttpListenerArn
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name
+  CodeDeployApplicationName:
+    Value: !Ref CodeDeployApplication
+  DeploymentGroupName:
+    Value: !Ref DeploymentGroup
