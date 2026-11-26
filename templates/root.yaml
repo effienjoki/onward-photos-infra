@@ -44,6 +44,15 @@ Parameters:
     Type: String
     AllowedValues: ['true', 'false']
     Default: 'true'
+  GitHubConnectionArn:
+    Type: String
+    Description: CodeConnections connection for the app repository.
+  AppRepository:
+    Type: String
+    Description: Owner/name of the application repository.
+  AppBranch:
+    Type: String
+    Default: main
 
 Resources:
 
@@ -81,6 +90,18 @@ Resources:
         BackupRetentionDays: !Ref BackupRetentionDays
         DeletionProtection: !Ref DeletionProtection
 
+  AppStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://onward-${Environment}-cfn-templates-${AWS::AccountId}.s3.${AWS::Region}.amazonaws.com/children/app.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        PhotoBucketArn: !GetAtt StorageStack.Outputs.PhotoBucketArn
+        DbSecretArn: !GetAtt DatabaseStack.Outputs.DbSecretArn
+        GitHubConnectionArn: !Ref GitHubConnectionArn
+        AppRepository: !Ref AppRepository
+        AppBranch: !Ref AppBranch
+
 Outputs:
   TemplatesRevision:
     Description: Which commit's child templates are deployed.
@@ -93,3 +114,7 @@ Outputs:
     Value: !GetAtt StorageStack.Outputs.PhotoBucketName
   DbEndpoint:
     Value: !GetAtt DatabaseStack.Outputs.DbEndpoint
+  EcrRepositoryUri:
+    Value: !GetAtt AppStack.Outputs.EcrRepositoryUri
+  PipelineName:
+    Value: !GetAtt AppStack.Outputs.PipelineName
